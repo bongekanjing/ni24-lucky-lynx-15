@@ -3,3 +3,4 @@ __pycache__/
 scratch_*.png
 verify_second.png
 crop_*.png
+out/
