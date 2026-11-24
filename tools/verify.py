@@ -121,7 +121,19 @@ print("empty 32px bands      : %d %s" % (len(empty_rows), empty_rows[:10]))
 if empty_rows:
     fails.append("dead band at %s" % empty_rows[:5])
 
-# 5. file-level checks
+# 5. legibility at about 300 px across: the page is shown small in the judge's
+# contact sheet and on the site, so the date must survive a 3.4x downscale.
+small = img.resize((300, 300), Image.LANCZOS)
+sp = small.load()
+# the date occupies the top band; count dark pixels there as a proxy for
+# whether it still reads as a block of type rather than grey mush
+date_ink = sum(1 for y in range(0, 45) for x in range(0, 300)
+               if sum(sp[x, y]) < 400)
+print("date ink at 300px     : %d px" % date_ink)
+if date_ink < 250:
+    fails.append("date illegible at 300 px")
+
+# 6. file-level checks
 size = out.stat().st_size
 with out.open("rb") as fh:
     magic = fh.read(8)

@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 scratch_*.png
 verify_second.png
+crop_*.png

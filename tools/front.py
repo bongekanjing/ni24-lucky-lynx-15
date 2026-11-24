@@ -19,6 +19,7 @@ This file runs at build time only; the graded program ships the bytes it
 writes. Nothing here is imported by main.py.
 """
 
+import itertools
 import sys
 from pathlib import Path
 
@@ -184,6 +185,30 @@ def wrap(draw, text, f, max_w):
     return lines
 
 
+def wrap_balanced(draw, text, f, max_w):
+    """Wrap, then even the lines out if the last one is a single word.
+
+    A caption that breaks as 'more people facing food-aid' / 'cuts' leaves an
+    orphan under a two-line caption block; re-breaking at the word that makes
+    the two lines closest in width costs nothing and reads as set, not
+    as overflow. Falls back to the plain wrap when no even break exists.
+    """
+    lines = wrap(draw, text, f, max_w)
+    if len(lines) < 2 or len(lines[-1].split()) > 1:
+        return lines
+    words = text.split()
+    best = None
+    for cut in range(1, len(words)):
+        first, second = " ".join(words[:cut]), " ".join(words[cut:])
+        if (draw.textlength(first, font=f) > max_w
+                or draw.textlength(second, font=f) > max_w):
+            continue
+        diff = abs(draw.textlength(first, font=f) - draw.textlength(second, font=f))
+        if best is None or diff < best[0]:
+            best = (diff, [first, second])
+    return best[1] if best else lines
+
+
 # ---------------------------------------------------------------- layout
 
 def render(out_path):
@@ -235,7 +260,7 @@ def render(out_path):
     num_bottom = max(d.textbbox((0, 0), big, font=fb)[3]
                      for (big, _), fb in zip(FIGURES, fig_big))
     cap_top = y + num_bottom + 4
-    cap_lines = [wrap(d, cap, f_cap, tw - 12) for _, cap in FIGURES]
+    cap_lines = [wrap_balanced(d, cap, f_cap, tw - 12) for _, cap in FIGURES]
     fig_bottom = cap_top + max(len(x) for x in cap_lines) * 11
     for i, (big, cap) in enumerate(FIGURES):
         bx = M + i * tw
@@ -420,77 +445,87 @@ def render(out_path):
     # The numbers are set in Oswald one step up from the brief, so the text
     # column has to clear their real width rather than a guess.
     #
-    # Type size, brief leading and the column cuts are searched together.
-    # Cutting greedily at a balanced height is the flattest partition of the
-    # copy, but it hands the columns unequal numbers of briefs, so evening
-    # the block out needs a different gap in each column and the briefs
-    # visibly breathe at different rates side by side. Searching the cuts as
-    # well finds a partition where one gap serves all four columns and the
-    # block still lands flush on the footer rule. Beats are kept whole where
-    # the search allows it: a beat's closing hairline in two columns reads as
-    # two different beats.
+    # Filling the block is a three-way trade between the type size, the brief
+    # leading and where the columns are cut. Twenty-six briefs over four
+    # columns divide as 7/6/6/7 whatever the cut, so no single leading lets one
+    # gap serve all four: the search fixes the size, then finds the cut and the
+    # per-column leading (never more than 2 px apart, which is invisible across
+    # a gutter) whose gaps agree most closely. Equal leading with unequal gaps
+    # was the alternative and it read as sloppiness -- adjacent columns
+    # breathing at 3 px and 13 px side by side. A cut may fall inside a beat:
+    # the numbering runs on and the beat's closing hairline lands at the top of
+    # the next column, which is how a paper sets a straddling beat.
     flat_index = [bi for bi, (_, heads) in enumerate(rows) for _ in heads]
     n_all = len(STORIES)
+    heads_flat = [hd for _, hs in rows for hd in hs]
 
     best = None
-    for cand in range(20, 9, -1):
-        f_num = font(OS_BOLD, cand + 1)
-        need = d.textlength("%02d" % n_all, font=f_num) + 6
-        this_lead_w = max(19.0, float(need))
-        f_br = font(DJ_BOLD, cand)
-        for lead in range(cand + 7, cand + 3, -1):
-            f_wrap = f_br
-            lines = [wrap(d, h, f_wrap, cw - this_lead_w) for h in
-                     [hd for _, heads in rows for hd in heads]]
-            box = [len(x) * lead + 6 for x in lines]
-            ink = [d.textbbox((0, 0), x[-1], font=f_br)[3] + (len(x) - 1) * lead
-                   for x in lines]
-            for a in range(5, n_all - 15):
-                for b in range(a + 5, n_all - 10):
-                    for c in range(b + 5, n_all - 5):
-                        pts = (0, a, b, c, n_all)
-                        gaps = [pts[i + 1] - pts[i] for i in range(cols)]
-                        if min(gaps) < 5:
+    for size in range(20, 11, -1):
+        f_num = font(OS_BOLD, size + 1)
+        this_lead_w = max(19.0, float(d.textlength("%02d" % n_all, font=f_num) + 6))
+        f_br = font(DJ_BOLD, size)
+        wrapped = [wrap(d, h, f_br, cw - this_lead_w) for h in heads_flat]
+        nlines = [len(x) for x in wrapped]
+        last_ink = [d.textbbox((0, 0), x[-1], font=f_br)[3] for x in wrapped]
+        for a in range(4, n_all - 14):
+            for b in range(a + 4, n_all - 9):
+                for c in range(b + 4, n_all - 4):
+                    pts = (0, a, b, c, n_all)
+                    gaps = [pts[i + 1] - pts[i] for i in range(cols)]
+                    if min(gaps) < 4:
+                        continue
+                    opts = []
+                    for i in range(cols):
+                        lo, hi = pts[i], pts[i + 1]
+                        per = []
+                        for ld in range(size + 3, size + 11):
+                            nat = (sum(nlines[lo:hi - 1]) * ld + 6 * (gaps[i] - 1)
+                                   + last_ink[hi - 1] + (nlines[hi - 1] - 1) * ld)
+                            g = (avail_h - nat) / (gaps[i] - 1)
+                            if 6.0 <= g <= 16.0:
+                                per.append((ld, g))
+                        if not per:
+                            break
+                        opts.append(per)
+                    if len(opts) < cols:
+                        continue
+                    for combo in itertools.product(*opts):
+                        gs = [x[1] for x in combo]
+                        lds = [x[0] for x in combo]
+                        ld_spread = max(lds) - min(lds)
+                        if ld_spread > 2:
                             continue
-                        pads = []
-                        for i in range(cols):
-                            lo, hi = pts[i], pts[i + 1]
-                            nat = sum(box[lo:hi - 1]) + ink[hi - 1]
-                            pads.append((avail_h - nat) / (gaps[i] - 1))
-                        if min(pads) < 1.0:
-                            continue
-                        even = max(pads) - min(pads)
-                        splits = sum(1 for cut in (a, b, c)
-                                     if flat_index[cut - 1] == flat_index[cut])
-                        # a beat split costs the same as 12 px of unevenness
-                        score = (round(even, 2) + 12.0 * splits, -cand)
+                        gap_spread = max(gs) - min(gs)
+                        score = (round(gap_spread + 0.8 * ld_spread, 2), -size)
                         if best is None or score < best[0]:
-                            best = (score, cand, lead, this_lead_w, pts,
-                                    pads, lines, even, splits)
+                            best = (score, size, this_lead_w, pts,
+                                    [x[0] for x in combo], gs, wrapped,
+                                    gap_spread, ld_spread)
     if best is None:                               # unreachable in practice
         raise SystemExit("no grid layout fits the space")
-    _, size, leading, lead_w, pts, plan, all_lines, even, splits = best
+    (_, size, lead_w, pts, leadings, gaps_used, all_lines,
+     gap_spread, ld_spread) = best
+    assert gap_spread <= 4.0, ("brief gaps uneven across columns", round(gap_spread, 2))
+    assert ld_spread <= 2, ("brief leading differs too much", ld_spread)
+
     f_num = font(OS_BOLD, size + 1)
     f_brief = font(DJ_BOLD, size)
-    columns = [[(all_lines[j], len(all_lines[j]) * leading + 6,
-                j == len(all_lines) - 1 or
-                flat_index[j] != flat_index[j + 1])
+    columns = [[(all_lines[j], len(all_lines[j]) * leadings[i] + 6,
+                j == n_all - 1 or flat_index[j] != flat_index[j + 1])
                 for j in range(pts[i], pts[i + 1])] for i in range(cols)]
     METRICS.update(grid_top=grid_top, grid_bottom=grid_bottom, avail_h=avail_h,
-                   brief_size=size, brief_lead=leading, brief_lead_w=lead_w,
+                   brief_size=size, brief_leads=leadings, brief_lead_w=lead_w,
                    lead_size=lead_size, lead_head_lead=head_lead,
-                   column_pads=[round(p, 2) for p in plan],
-                   block_evenness=round(even, 2), beat_splits=splits,
+                   column_pads=[round(p, 2) for p in gaps_used],
+                   pad_spread=round(gap_spread, 2),
                    columns=[len(c) for c in columns])
-
-    assert sum(len(c) for c in columns) == n_all, [len(c) for c in columns]
-    assert all(len(c) for c in columns), "grid left a column empty"
 
     n = 0
     bottoms = []
     for col_i, col in enumerate(columns):
         col_x = M + col_i * (cw + gut)
-        pad = plan[col_i]
+        pad = gaps_used[col_i]
+        leading = leadings[col_i]
         ty_off = 0.0
         for blk_i, (lines, hgt, ends_beat) in enumerate(col):
             n += 1
@@ -500,23 +535,25 @@ def render(out_path):
                 d.text((col_x + lead_w, ty + j * leading), ln, font=f_brief, fill=INK)
             ty_off += hgt
             if ends_beat:
-                ry = grid_top + ty_off - leading // 2
+                ry = int(round(grid_top + ty_off - leading / 2.0))
                 d.line([col_x, ry, col_x + cw - 5, ry], fill=HAIR, width=1)
             if blk_i < len(col) - 1:
                 ty_off += pad
         # the real ink bottom of the column's last line
-        last_ink = d.textbbox((0, 0), lines[-1], font=f_brief)[3]
-        ink_bottom = grid_top + ty_off - hgt + (len(lines) - 1) * leading + last_ink
+        last_lines, last_hgt, _ = col[-1]
+        last_ink = d.textbbox((0, 0), last_lines[-1], font=f_brief)[3]
+        ink_bottom = (grid_top + ty_off - last_hgt
+                      + (len(last_lines) - 1) * leading + last_ink)
         bottoms.append(ink_bottom)
         if col_i:
             d.line([col_x - gut // 2, grid_top, col_x - gut // 2,
-                    ink_bottom - 5], fill=(224, 219, 208), width=1)
+                    int(ink_bottom) - 5], fill=(224, 219, 208), width=1)
+
     assert n == len(STORIES), (n, len(STORIES))
     assert max(bottoms) <= grid_bottom + 0.5, ("grid overruns footer", max(bottoms), grid_bottom)
     assert max(bottoms) - min(bottoms) <= 1.0, ("columns do not end level",
                                                [round(v, 1) for v in bottoms])
-    METRICS.update(column_bottoms=[round(v, 1) for v in bottoms],
-                   column_pads=[round(p, 2) for p in plan])
+    METRICS.update(column_bottoms=[round(v, 1) for v in bottoms])
 
     # footer: the day restated, and the sources
     d.line([M, H - 34, W - M, H - 34], fill=RULE, width=1)
