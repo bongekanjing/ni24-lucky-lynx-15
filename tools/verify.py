@@ -95,7 +95,9 @@ if overlaps:
 
 # 3. the date, deck and footer strings are on the sheet
 ink = " ".join(t for t, _, _ in calls)
-for needle in ("24 NOVEMBER 2026", "TUESDAY", "26 briefs in 8 beats",
+for needle in ("24 NOVEMBER 2026", "TUESDAY",
+               "%d briefs in %d beats" % (len(front.STORIES),
+                                          len({b for b, _ in front.STORIES})),
                "COP31 ends in collapse", "7.3 million", "New Zealand"):
     if needle not in ink:
         fails.append("missing copy: %s" % needle)
