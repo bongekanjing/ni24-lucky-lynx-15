@@ -10,8 +10,9 @@ AI agent.
 
 `entry.png` is a single 1024x1024 typographic newspaper front page: the day's
 date as the page's largest type, a strip of the day's key figures, four
-typographic leads across the measure, and a numbered four-column grid of 26
-one-line briefs across eight beats.
+typographic leads across the measure, and a numbered five-column grid of 40
+one-line briefs across eight beats. Each lead carries a small drawn plate above
+its kicker, a flat vignette of its story.
 
 ## What the page carries
 
@@ -28,7 +29,7 @@ Four leads, one per region-defining story:
   million more people at risk.
 
 The briefs cover climate, the Middle East, Ukraine and Europe, Asia, the
-Americas, the economy, Africa and sport — 26 stories, eight beats, with figures
+Americas, the economy, Africa and sport — 40 stories, eight beats, with figures
 as published that day and one-sided claims attributed rather than asserted.
 
 ## How it is built
